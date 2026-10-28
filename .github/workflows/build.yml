@@ -61,7 +61,7 @@ jobs:
               implementation(platform("androidx.compose:compose-bom:2024.09.03"))
               implementation("androidx.compose.ui:ui")
               implementation("androidx.compose.material3:material3")
-              val camerax = "1.3.4"
+              val camerax = "1.4.0"
               implementation("androidx.camera:camera-core:$camerax")
               implementation("androidx.camera:camera-camera2:$camerax")
               implementation("androidx.camera:camera-lifecycle:$camerax")
@@ -77,7 +77,7 @@ jobs:
               <application
                   android:label="カメラ"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
-                  <activity android:name=".MainActivity" android:exported="true">
+                  <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="portrait">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
@@ -91,6 +91,7 @@ jobs:
           package com.example.camera
 
           import android.Manifest
+          import android.annotation.SuppressLint
           import android.content.ContentValues
           import android.content.Intent
           import android.content.pm.PackageManager
@@ -98,12 +99,16 @@ jobs:
           import android.os.Bundle
           import android.provider.MediaStore
           import android.util.Size
+          import android.view.ScaleGestureDetector
           import android.widget.Toast
           import androidx.activity.ComponentActivity
           import androidx.activity.compose.rememberLauncherForActivityResult
           import androidx.activity.compose.setContent
           import androidx.activity.result.contract.ActivityResultContracts
           import androidx.camera.core.*
+          import androidx.camera.core.resolutionselector.AspectRatioStrategy
+          import androidx.camera.core.resolutionselector.ResolutionSelector
+          import androidx.camera.core.resolutionselector.ResolutionStrategy
           import androidx.camera.lifecycle.ProcessCameraProvider
           import androidx.camera.view.PreviewView
           import androidx.compose.foundation.Image
@@ -147,6 +152,14 @@ jobs:
               }
           }
 
+          // 4:3 の最高解像度で撮影する設定
+          private fun highQualitySelector() = ResolutionSelector.Builder()
+              .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+              .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+              .setAllowedResolutionMode(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
+              .build()
+
+          @SuppressLint("ClickableViewAccessibility")
           @Composable
           fun CameraScreen() {
               val ctx = LocalContext.current
@@ -154,18 +167,38 @@ jobs:
               var front by remember { mutableStateOf(false) }
               var flash by remember { mutableStateOf(false) }
               var last by remember { mutableStateOf<Uri?>(null) }
+              var camera by remember { mutableStateOf<Camera?>(null) }
+              var zoom by remember { mutableFloatStateOf(1f) }
+
               val previewView = remember { PreviewView(ctx) }
-              val capture = remember { ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build() }
+              val capture = remember {
+                  ImageCapture.Builder()
+                      .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                      .setJpegQuality(100)
+                      .setResolutionSelector(highQualitySelector())
+                      .build()
+              }
               capture.flashMode = if (flash) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
 
+              fun setZoom(r: Float) {
+                  val cam = camera ?: return
+                  val zs = cam.cameraInfo.zoomState.value ?: return
+                  val v = r.coerceIn(zs.minZoomRatio, zs.maxZoomRatio)
+                  cam.cameraControl.setZoomRatio(v)
+                  zoom = v
+              }
+
               LaunchedEffect(front) {
+                  zoom = 1f
                   val future = ProcessCameraProvider.getInstance(ctx)
                   future.addListener({
                       val provider = future.get()
-                      val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+                      val preview = Preview.Builder()
+                          .setResolutionSelector(highQualitySelector())
+                          .build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
                       val selector = if (front) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
                       provider.unbindAll()
-                      provider.bindToLifecycle(owner, selector, preview, capture)
+                      camera = provider.bindToLifecycle(owner, selector, preview, capture)
                   }, ContextCompat.getMainExecutor(ctx))
               }
 
@@ -174,12 +207,42 @@ jobs:
               }
 
               Column(Modifier.fillMaxSize().background(Color.Black).statusBarsPadding().navigationBarsPadding()) {
-                  Box(Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(bottomStart = 20.dp, bottomEnd = 20.dp))) {
-                      AndroidView({ previewView }, Modifier.fillMaxSize())
-                      TextButton(
-                          onClick = { flash = !flash },
-                          modifier = Modifier.align(Alignment.TopEnd).padding(8.dp).background(Color(0x99000000), CircleShape)
-                      ) { Text(if (flash) "フラッシュ オン" else "フラッシュ オフ", color = Color.White) }
+                  Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
+                      // 画面の 4:3 の範囲がそのまま写真になります
+                      Box(Modifier.fillMaxWidth().aspectRatio(3f / 4f).clip(RoundedCornerShape(16.dp))) {
+                          AndroidView(
+                              factory = {
+                                  val detector = ScaleGestureDetector(ctx, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                                      override fun onScale(d: ScaleGestureDetector): Boolean {
+                                          setZoom(zoom * d.scaleFactor); return true
+                                      }
+                                  })
+                                  previewView.setOnTouchListener { _, e -> detector.onTouchEvent(e); true }
+                                  previewView
+                              },
+                              modifier = Modifier.fillMaxSize()
+                          )
+                          Text(
+                              "%.1f×".format(zoom), color = Color.White,
+                              modifier = Modifier.align(Alignment.TopStart).padding(10.dp)
+                                  .background(Color(0x99000000), CircleShape).padding(horizontal = 12.dp, vertical = 6.dp)
+                          )
+                          TextButton(
+                              onClick = { flash = !flash },
+                              modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).background(Color(0x99000000), CircleShape)
+                          ) { Text(if (flash) "フラッシュ オン" else "フラッシュ オフ", color = Color.White) }
+                          Row(
+                              Modifier.align(Alignment.BottomCenter).padding(10.dp),
+                              horizontalArrangement = Arrangement.spacedBy(8.dp)
+                          ) {
+                              listOf(1f, 2f, 5f).forEach { z ->
+                                  TextButton(
+                                      onClick = { setZoom(z) },
+                                      modifier = Modifier.background(if (zoom == z) Color(0xFF6FB3FF) else Color(0x99000000), CircleShape)
+                                  ) { Text("${z.toInt()}×", color = if (zoom == z) Color(0xFF06121F) else Color.White) }
+                              }
+                          }
+                      }
                   }
                   Row(Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 18.dp), Arrangement.SpaceBetween, Alignment.CenterVertically) {
                       Box(
