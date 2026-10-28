@@ -129,6 +129,7 @@ jobs:
           import androidx.compose.ui.platform.LocalContext
           import androidx.compose.ui.platform.LocalLifecycleOwner
           import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
           import androidx.compose.ui.viewinterop.AndroidView
           import androidx.core.content.ContextCompat
 
@@ -165,7 +166,6 @@ jobs:
               val ctx = LocalContext.current
               val owner = LocalLifecycleOwner.current
               var front by remember { mutableStateOf(false) }
-              var flash by remember { mutableStateOf(false) }
               var last by remember { mutableStateOf<Uri?>(null) }
               var camera by remember { mutableStateOf<Camera?>(null) }
               var zoom by remember { mutableFloatStateOf(1f) }
@@ -178,7 +178,6 @@ jobs:
                       .setResolutionSelector(highQualitySelector())
                       .build()
               }
-              capture.flashMode = if (flash) ImageCapture.FLASH_MODE_ON else ImageCapture.FLASH_MODE_OFF
 
               fun setZoom(r: Float) {
                   val cam = camera ?: return
@@ -227,19 +226,20 @@ jobs:
                               modifier = Modifier.align(Alignment.TopStart).padding(10.dp)
                                   .background(Color(0x99000000), CircleShape).padding(horizontal = 12.dp, vertical = 6.dp)
                           )
-                          TextButton(
-                              onClick = { flash = !flash },
-                              modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).background(Color(0x99000000), CircleShape)
-                          ) { Text(if (flash) "フラッシュ オン" else "フラッシュ オフ", color = Color.White) }
                           Row(
                               Modifier.align(Alignment.BottomCenter).padding(10.dp),
                               horizontalArrangement = Arrangement.spacedBy(8.dp)
                           ) {
                               listOf(1f, 2f, 5f).forEach { z ->
-                                  TextButton(
-                                      onClick = { setZoom(z) },
-                                      modifier = Modifier.background(if (zoom == z) Color(0xFF6FB3FF) else Color(0x99000000), CircleShape)
-                                  ) { Text("${z.toInt()}×", color = if (zoom == z) Color(0xFF06121F) else Color.White) }
+                                  val on = zoom == z
+                                  Text(
+                                      "${z.toInt()}×", fontSize = 12.sp,
+                                      color = if (on) Color(0xFF06121F) else Color.White,
+                                      modifier = Modifier.clip(CircleShape)
+                                          .background(if (on) Color(0xFF6FB3FF) else Color(0x99000000))
+                                          .clickable { setZoom(z) }
+                                          .padding(horizontal = 10.dp, vertical = 4.dp)
+                                  )
                               }
                           }
                       }
